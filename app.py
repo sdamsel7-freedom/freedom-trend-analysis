@@ -32,7 +32,7 @@ def get_api_data(keyword_groups, gender):
         "timeUnit": "month",
         "keywordGroups": keyword_groups,
         "device": "",
-        "ages": ["3", "4", "5", "6", "7"], # 19~44세
+        "ages": ["3", "4", "5", "6", "7"], # 19~44세 타겟팅
         "gender": gender
     }
     response = requests.post(url, headers=headers, data=json.dumps(body))
@@ -50,10 +50,29 @@ def get_api_data(keyword_groups, gender):
         return pd.DataFrame(data_list)
     return pd.DataFrame()
 
-# 4. 사이드바 설정
+# 4. 사이드바: 양식 다운로드 및 파일 업로드
 with st.sidebar:
     st.header("📁 데이터 관리")
-    uploaded_file = st.file_uploader("분석할 엑셀 파일을 업로드하세요", type=["xlsx"])
+    
+    # [복구된 기능] 엑셀 양식 다운로드 버튼
+    st.subheader("1. 양식 받기")
+    try:
+        with open("keywords_input.xlsx", "rb") as f:
+            st.download_button(
+                label="📥 분석 양식(Excel) 다운로드",
+                data=f,
+                file_name="keywords_input.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+        st.caption("양식을 다운로드하여 GroupName과 Keywords를 입력하세요.")
+    except FileNotFoundError:
+        st.warning("서버에 keywords_input.xlsx 파일이 없습니다. GitHub에 파일을 먼저 올려주세요.")
+
+    st.divider()
+    
+    # 파일 업로드
+    st.subheader("2. 데이터 분석")
+    uploaded_file = st.file_uploader("수정하신 엑셀 파일을 업로드하세요", type=["xlsx"])
 
 # 5. 메인 로직
 if uploaded_file:
@@ -76,6 +95,7 @@ if uploaded_file:
             reference_data = pd.DataFrame()
             progress = st.progress(0)
             
+            # API 배치 처리 및 스케일 보정 로직 (기존과 동일)
             batch_size = 4
             for i in range(0, len(other_groups) if other_groups else 1, batch_size):
                 chunk = other_groups[i:i+batch_size]
@@ -104,11 +124,12 @@ if uploaded_file:
             anchor_name = st.session_state['anchor_name']
             
             st.divider()
-            st.subheader("🎯 키워드 필터링 및 다운로드")
+            st.subheader("🎯 결과 필터링 및 다운로드")
             
+            # 멀티 선택 필터
             available_keywords = res_df['Keyword_Group'].unique().tolist()
             selected_items = st.multiselect(
-                "그래프에서 확인하고 싶은 키워드들을 고르세요:",
+                "화면에서 보고 싶은 키워드만 선택하세요:",
                 options=available_keywords,
                 default=available_keywords
             )
@@ -116,10 +137,10 @@ if uploaded_file:
             if selected_items:
                 filtered_df = res_df[res_df['Keyword_Group'].isin(selected_items)]
                 
-                # 차트 및 비중 출력
+                # 시각화 및 비중
                 col1, col2 = st.columns([3, 1])
                 with col1:
-                    st.subheader(f"📊 선택한 키워드별 트렌드 (기준: {anchor_name})")
+                    st.subheader(f"📊 검색 트렌드 (기준: {anchor_name})")
                     chart_data = filtered_df.pivot_table(index='Date', columns='Keyword_Group', values='Ratio', aggfunc='mean')
                     st.line_chart(chart_data)
                 
@@ -128,25 +149,20 @@ if uploaded_file:
                     gender_stats = filtered_df.groupby('Gender')['Ratio'].mean()
                     st.write(gender_stats)
 
-                # [복구된 다운로드 기능] 필터링된 결과 기반
-                st.divider()
-                st.subheader("📥 분석 결과 내보내기")
+                # 분석 결과 다운로드 버튼
                 output = io.BytesIO()
-                # 엑셀 파일 생성을 위해 xlsxwriter 엔진 사용
                 with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-                    filtered_df.to_excel(writer, index=False, sheet_name='Filtered_Result')
+                    filtered_df.to_excel(writer, index=False, sheet_name='Analysis_Result')
                 
                 st.download_button(
-                    label="📊 선택된 결과 엑셀로 받기 (Download Excel)",
+                    label="📥 선택된 분석 결과 엑셀로 저장",
                     data=output.getvalue(),
-                    file_name=f"freedom_filtered_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                    file_name=f"freedom_trend_{datetime.now().strftime('%Y%m%d')}.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 )
                 
                 st.dataframe(filtered_df, use_container_width=True)
-            else:
-                st.warning("하나 이상의 키워드를 선택해 주세요.")
     else:
         st.error("엑셀 파일에 'GroupName' 컬럼이 필요합니다.")
 else:
-    st.info("파일을 업로드하고 '분석 시작'을 눌러주세요.")
+    st.info("왼쪽 사이드바에서 양식을 다운로드하여 작성한 뒤 업로드해 주세요.")
