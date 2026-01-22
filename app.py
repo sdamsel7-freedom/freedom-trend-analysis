@@ -76,7 +76,6 @@ if uploaded_file:
             reference_data = pd.DataFrame()
             progress = st.progress(0)
             
-            # API 배치 처리 및 스케일 보정 로직 (기존과 동일)
             batch_size = 4
             for i in range(0, len(other_groups) if other_groups else 1, batch_size):
                 chunk = other_groups[i:i+batch_size]
@@ -96,19 +95,18 @@ if uploaded_file:
                 progress.progress(min((i + batch_size) / (len(other_groups) + 1) if other_groups else 1.0, 1.0))
 
             st.session_state['analysis_result'] = final_df
+            st.session_state['anchor_name'] = anchor_name
             st.success("분석이 완료되었습니다!")
 
-        # [핵심 추가] 분석 결과가 있을 때 키워드 선택 필터 표시
+        # 분석 결과 표시 및 필터/다운로드 섹션
         if 'analysis_result' in st.session_state:
             res_df = st.session_state['analysis_result']
+            anchor_name = st.session_state['anchor_name']
             
             st.divider()
-            st.subheader("🎯 키워드 필터링")
+            st.subheader("🎯 키워드 필터링 및 다운로드")
             
-            # 모든 키워드 리스트 추출
             available_keywords = res_df['Keyword_Group'].unique().tolist()
-            
-            # 멀티 선택 박스 (기본값은 전체 선택)
             selected_items = st.multiselect(
                 "그래프에서 확인하고 싶은 키워드들을 고르세요:",
                 options=available_keywords,
@@ -116,10 +114,9 @@ if uploaded_file:
             )
             
             if selected_items:
-                # 선택된 키워드만 필터링
                 filtered_df = res_df[res_df['Keyword_Group'].isin(selected_items)]
                 
-                # 결과 출력
+                # 차트 및 비중 출력
                 col1, col2 = st.columns([3, 1])
                 with col1:
                     st.subheader(f"📊 선택한 키워드별 트렌드 (기준: {anchor_name})")
@@ -127,11 +124,25 @@ if uploaded_file:
                     st.line_chart(chart_data)
                 
                 with col2:
-                    st.subheader("👥 성별 비중 (선택 키워드)")
+                    st.subheader("👥 성별 비중 (평균)")
                     gender_stats = filtered_df.groupby('Gender')['Ratio'].mean()
                     st.write(gender_stats)
 
-                st.subheader("📋 상세 데이터 (선택 키워드)")
+                # [복구된 다운로드 기능] 필터링된 결과 기반
+                st.divider()
+                st.subheader("📥 분석 결과 내보내기")
+                output = io.BytesIO()
+                # 엑셀 파일 생성을 위해 xlsxwriter 엔진 사용
+                with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+                    filtered_df.to_excel(writer, index=False, sheet_name='Filtered_Result')
+                
+                st.download_button(
+                    label="📊 선택된 결과 엑셀로 받기 (Download Excel)",
+                    data=output.getvalue(),
+                    file_name=f"freedom_filtered_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
+                
                 st.dataframe(filtered_df, use_container_width=True)
             else:
                 st.warning("하나 이상의 키워드를 선택해 주세요.")
