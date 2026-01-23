@@ -17,8 +17,15 @@ except KeyError:
     st.error("오류: Streamlit Secrets 설정을 확인해주세요.")
     st.stop()
 
+# 연령대 매핑 딕셔너리
+AGE_MAP = {
+    "0~12세": "1", "13~18세": "2", "19~24세": "3", "25~29세": "4",
+    "30~34세": "5", "35~39세": "6", "40~44세": "7", "45~49세": "8",
+    "50~54세": "9", "55~59세": "10", "60세 이상": "11"
+}
+
 # 3. Naver API 호출 함수
-def get_api_data(keyword_groups, gender):
+def get_api_data(keyword_groups, gender, age_codes):
     url = "https://openapi.naver.com/v1/datalab/search"
     headers = {
         "X-Naver-Client-Id": CLIENT_ID,
@@ -31,7 +38,7 @@ def get_api_data(keyword_groups, gender):
         "timeUnit": "month",
         "keywordGroups": keyword_groups,
         "device": "",
-        "ages": ["3", "4", "5", "6", "7"], # 19~44세 타겟
+        "ages": age_codes, # [수정] 사용자가 선택한 연령대 코드 적용
         "gender": gender
     }
     try:
@@ -61,6 +68,19 @@ with st.sidebar:
             st.download_button("📥 분석 양식(Excel) 받기", f, file_name="keywords_input.xlsx")
     except:
         pass
+    
+    st.divider()
+    
+    # [새 기능] 연령대 멀티 선택 필터
+    st.subheader("👥 타겟 연령대 설정")
+    selected_ages = st.multiselect(
+        "분석할 연령대를 선택하세요:",
+        options=list(AGE_MAP.keys()),
+        default=["19~24세", "25~29세", "30~34세", "35~39세", "40~44세"] # 프리덤 기본 타겟
+    )
+    # 선택된 한글 라벨을 API 코드로 변환
+    age_codes = [AGE_MAP[age] for age in selected_ages]
+    
     st.divider()
     uploaded_file = st.file_uploader("수정하신 엑셀 파일을 업로드하세요", type=["xlsx"])
 
@@ -76,16 +96,12 @@ if uploaded_file:
             g_name = str(row[name_col]).strip()
             if not g_name or g_name.startswith('*') or g_name == "nan": continue
             
-            # [핵심 로직 변경] GroupName을 기본 검색어로 포함
             keyword_list = [g_name]
-            
-            # Keywords 컬럼에 추가 검색어가 있다면 리스트에 더해줌
             raw_kws = str(row[kw_col]).strip() if kw_col and pd.notnull(row[kw_col]) else ""
             if raw_kws and raw_kws.lower() != "nan":
                 extra_kws = [k.strip() for k in raw_kws.split(',') if k.strip()]
                 keyword_list.extend(extra_kws)
             
-            # 중복 단어 제거 (순서 유지)
             final_keywords = list(dict.fromkeys(keyword_list))
             all_groups.append({"groupName": g_name, "keywords": final_keywords})
 
@@ -95,39 +111,47 @@ if uploaded_file:
             other_groups = all_groups[1:]
 
             if st.sidebar.button("🚀 분석 시작 (Run Analysis)"):
-                final_df = pd.DataFrame()
-                reference_data = pd.DataFrame()
-                status = st.empty()
-                progress = st.progress(0)
-                
-                batch_size = 4
-                for i in range(0, len(other_groups) if other_groups else 1, batch_size):
-                    chunk = other_groups[i:i+batch_size]
-                    current_batch = [anchor_group] + chunk
-                    status.text(f"⏳ 분석 중: {anchor_name} + {', '.join([c['groupName'] for c in chunk])}")
+                if not age_codes:
+                    st.error("최소 하나 이상의 연령대를 선택해야 합니다.")
+                else:
+                    final_df = pd.DataFrame()
+                    reference_data = pd.DataFrame()
+                    status = st.empty()
+                    progress = st.progress(0)
                     
-                    batch_res = pd.concat([get_api_data(current_batch, 'm'), get_api_data(current_batch, 'f')], ignore_index=True)
-                    if batch_res.empty: continue
+                    batch_size = 4
+                    for i in range(0, len(other_groups) if other_groups else 1, batch_size):
+                        chunk = other_groups[i:i+batch_size]
+                        current_batch = [anchor_group] + chunk
+                        status.text(f"⏳ 분석 중: {anchor_name} + {', '.join([c['groupName'] for c in chunk])}")
+                        
+                        # [수정] 선택된 연령대 코드를 API 함수에 전달
+                        batch_res = pd.concat([
+                            get_api_data(current_batch, 'm', age_codes), 
+                            get_api_data(current_batch, 'f', age_codes)
+                        ], ignore_index=True)
+                        
+                        if batch_res.empty: continue
 
-                    if i == 0 or reference_data.empty:
-                        reference_data = batch_res[batch_res['Keyword_Group'] == anchor_name].copy()
-                        final_df = batch_res
-                    else:
-                        curr_anchor = batch_res[batch_res['Keyword_Group'] == anchor_name].copy()
-                        if not curr_anchor.empty and not reference_data.empty:
-                            scale_merge = pd.merge(curr_anchor, reference_data, on=['Date', 'Gender'], suffixes=('_curr', '_ref'))
-                            if not scale_merge.empty:
-                                scale_merge['Factor'] = scale_merge['Ratio_ref'] / scale_merge['Ratio_curr']
-                                batch_res = pd.merge(batch_res, scale_merge[['Date', 'Gender', 'Factor']], on=['Date', 'Gender'])
-                                batch_res['Ratio'] = batch_res['Ratio'] * batch_res['Factor']
-                                final_df = pd.concat([final_df, batch_res[batch_res['Keyword_Group'] != anchor_name]], ignore_index=True)
-                    progress.progress(min((i + batch_size) / (len(other_groups) + 1) if other_groups else 1.0, 1.0))
+                        if i == 0 or reference_data.empty:
+                            reference_data = batch_res[batch_res['Keyword_Group'] == anchor_name].copy()
+                            final_df = batch_res
+                        else:
+                            curr_anchor = batch_res[batch_res['Keyword_Group'] == anchor_name].copy()
+                            if not curr_anchor.empty and not reference_data.empty:
+                                scale_merge = pd.merge(curr_anchor, reference_data, on=['Date', 'Gender'], suffixes=('_curr', '_ref'))
+                                if not scale_merge.empty:
+                                    scale_merge['Factor'] = scale_merge['Ratio_ref'] / scale_merge['Ratio_curr']
+                                    batch_res = pd.merge(batch_res, scale_merge[['Date', 'Gender', 'Factor']], on=['Date', 'Gender'])
+                                    batch_res['Ratio'] = batch_res['Ratio'] * batch_res['Factor']
+                                    final_df = pd.concat([final_df, batch_res[batch_res['Keyword_Group'] != anchor_name]], ignore_index=True)
+                        progress.progress(min((i + batch_size) / (len(other_groups) + 1) if other_groups else 1.0, 1.0))
 
-                status.empty()
-                if not final_df.empty:
-                    st.session_state['analysis_result'] = final_df
-                    st.session_state['anchor_name'] = anchor_name
-                    st.success("✅ 분석 완료!")
+                    status.empty()
+                    if not final_df.empty:
+                        st.session_state['analysis_result'] = final_df
+                        st.session_state['anchor_name'] = anchor_name
+                        st.success("✅ 분석 완료!")
 
         # 6. 결과 출력
         if st.session_state.get('analysis_result') is not None:
